@@ -1,0 +1,705 @@
+= Welcome to
+:imagesdir: ./images
+:backend: revealjs
+:icons: font
+:revealjs_theme: solarized
+:customcss: ./styles/formatting.css
+:source-highlighter: highlightjs
+
+
+[.big]
+Understanding
+
+image::./title/apache_spark_logo_background.png[Spark Logo]
+
+[.big]
+Internals
+
+== Before starting ...
+
+=== Me
+
+Arnaud Larroque +
+
+Big Data / Backend developer +
+
+Freelance +
+
+Currently working with *Adneom* as contractor for *Carrefour Big data team*
+
+Email me : alarroque@gmail.com +
+Follow me: @nonontb
+
+=== This talk
+
+More about *Apache Spark internals* than learning how to use it ! +
+
+Handcrafted presentation by *me & my daugther*
+
+=== Let's dive ...
+
+== A cluster computing system
+
+Spark is a *framework* which will help coordinate *cluster* to act as a *single one*
+
+Why a Cluster ?
+
+There are tasks as data processing that the best computer can't handle
+
+=== Spark cluster manager
+
+All the cumulative resources of a cluster doesn't do anything alone.
+You need something to manage all available nodes composing a cluster +
+
+- Spark standalone
+- Hadoop Yarn
+- Apache Mesos
+- Kubernetes (experimental) : container based manager / orchestrator
+
+[.notes]
+--
+There is also a local deployment => mainly testing purpose as Driver/Executors
+are replaced by thread
+--
+
+=== Spark application
+
+Is a *driver* and some *executors*
+
+Many Spark applications can be run in the same cluster concurrently
+
+=== Driver role
+
+- Runs user code (```main()```) and build a *DAG*
+- Maintains cluster state
+- Schedules and distributes all tasks
+
+[.notes]
+--
+* Do not talk too much about DAG
+--
+
+=== Executor role
+
+- Read / Write / Store data
+- Execute what the driver assigns them
+- Send metrics back to the driver
+
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::cluster_overview/1.svg[alt="Cluster Overview 1", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::cluster_overview/2.svg[alt="Cluster Overview 2", background, height=600px]
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::cluster_overview/3.svg[alt="Cluster Overview 5", background, height=600px]
+
+
+== Spark core component : RDD
+
+[.big]
+RDD as *_Resilient distributed dataset_*
+
+Core Spark data structure
+
+No matter which API is used, +
+It will end producing RDDs
+
+=== RDD: What is it exactly ?
+
+Made up of 4 attributes :
+
+[%step]
+* Dependencies : Relation between a RDD and the one it is derived from
+* Partitions : subset of dataset located on cluster node
+* Function : transform this RDD from its parents version
+* Metadata : Partitioning scheme and data locality
+
+
+=== Dependencies
+
+RDDs *Dependencies* stand for its *Resilience*
+
+[.notes]
+--
+It keeps track of all previous steps
+We can rewind all dependencies and restart from the beginning
+--
+
+=== Partitions
+
+* A dataset *chunk* located on a cluster node
+* Define along the cluster size the *parallelism*
+
+[.notes]
+--
+* Partitioner defines in which partition data will end
+* default partitioner: HashCode modulo nb_partitions
+* Relation between File and partition : Splittable, block, Partitioner, ...
+--
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::rdd/1.svg[alt="RDD 1", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::rdd/2.svg[alt="RDD 2", background, height=600px]
+
+[transition="none-in fade-out"]
+=== !
+image::rdd/3.svg[alt="RDD 3", background, height=600px]
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::rdd/4.svg[alt="RDD 4", background, height=600px]
+
+=== Typed collection
+
+*Typed safe* many errors arise at *compile-time*
+
+*Designed to be used as a Scala collection*
+
+Can handle Structured data and unique choice unstructured data (ie Binary)
+
+[.notes]
+--
+Most known scala collection API methods `map`, `flatMap`, `filter`, ... apply to RDD
+meaning use as a non distributed abstraction
+--
+
+=== When to use
+
+When you need *control & flexibility* over built-in *performance*,
+*resources optimization* and *code expressiveness*
+
+Best for unstructured data == Binary
+
+[.notes]
+--
+See later with tungsten and Catalyst optimizer
+Unstructured data => Binary
+--
+
+== Running code in Spark
+
+*Code you write is not directly run !*
+
+Spark will used it to build *DAG == Directed Acyclic Graph*
+
+image::giphy.webp[Whaaaat?]
+[.notes]
+--
+Try to explain it with debugger use case.
+--
+=== A DAG ?
+
+*RDD lineage* or RDDs dependencies Graph
+
+* Vertice = Immutable '__version__' of a RDD
+* Edge = Transformations between RDDs
+* No way back
+* Execution triggered by an *Action*
+
+
+=== Spark Operation : transformation
+
+* Lazy evaluated
+* Return a new *immutable RDD*
+* Can be a *Narrow* or *Wide* dependencies
+
+[.notes]
+--
+ nothing is done when called, just another part of the Dag is built
+--
+
+=== Narrow
+
+Each partition of the parent RDD *is used by at most one partition* of the child RDD
+
+=== Wide
+
+Each partition of the parent RDD *may be used by multiple child* partitions
+
+=== Narrow vs Wide transformation
+
+Narrow transformation can be *pipelined* while wide transformation requires *shuffling data*
+
+[.notes]
+--
+* pipelined transformations into one stage
+* shuffling delimits stages
+* Wide dependencies goes with performance impact as date is redistributed across cluster nodes
+--
+
+=== !
+[transition="fade-in none-out", transition-speed="fast"]
+image::dependencies/Narrow.svg[alt="narrow", background, height=600px]
+
+=== !
+[transition="none-in fade-out",  transition-speed="fast"]
+image::dependencies/Wide.svg[alt="wide", background, height=600px]
+
+=== Spark Operation : Actions
+
+* Action values are stored to driver or external storage system
+* *Trigger DAG execution* and do not produce new RDD
+
+[.notes]
+--
+* Do not store huge dataset on driver. Driver require small memory footprint
+* Collect may be a driver killer, Increase driver memory is mostly a
+misconception
+--
+
+=== DAG: Hello world!
+
+image::dag/dag.png[Directed acyclic graph, background,height=550px]
+
+[.notes]
+--
+Ask which famous job this DAG do ?
+--
+
+=== Wordcount, What else ?!
+
+[source, scala]
+----
+sc.textFile("hdfs://...")
+ .flatMap(line => line.split(" "))
+ .map(word => (word, 1)) // read, map and flatmap in one stage
+ .reduceByKey(_ + _) // shuffle => new stage
+ .saveAsTextFile("hdfs://...") // Nothing is done before
+----
+
+=== Hello world! DAG on a Cluster
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::dag_run/1.svg[alt="Dag run 1", background,height=600px]
+
+[.notes]
+--
+* A stage is serialized into tasks, one for each executor
+* textFile, flatMap, map are pipelined
+--
+
+[transition="none-in none-out"]
+=== !
+image::dag_run/2.svg[alt="Dag run 2", background,height=600px]
+
+[.notes]
+--
+* A shuffle occurs before reduceByKey
+--
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::dag_run/3.svg[alt="Dag run 3", background,height=600px]
+
+[.notes]
+--
+* Reduce is perform then saveAsTextFile on Hdfs
+--
+
+== Need for High-level API
+
+[%step]
+* RDD is about *How* do things but not *What* to do
+* Non-jvm language (Python, R, more to come ...) run slower
+* Are you certain *How you do things* is the best way ? _(I mean ...)_
+
+[.notes]
+--
+* RDD: low-level API with no leverage for optimization
+--
+
+=== Dataframe / Dataset API
+
+Dataframe is still an *immutable distributed data collection*
+but data is abstracted as *table in relational database*
+
+=== Dataframe / Dataset features
+
+* Structured data with an adhoc schema
+* Provide a DSL API for code
+* Similar to well-known tools from other languages (Pandas, dplyr)
+* Access audience other than Data engineer
+* Leverage *Catalyst optimization* and *tungsten* improvements
+
+=== Unified API
+
+Unified DataFrame and Dataset API since Spark 2.0
+[source,scala]
+----
+Dataframe == Dataset[Row]
+----
+
+RDD Type-safe / functionnal programming and Dataframe DSL code optimization
+
+== Catalyst optimizer
+
+[%step]
+* Trees abstraction library which represents a user program
+* Execution engine which powers Dataframe / Dataset API and Spark SQL
+* Composed of 4 phases :
+ ** 3 phases based of Trees transformation by applying Rules
+ ** 1 final step to generate byte code
+* Designed to be easily extended
+
+[.notes]
+--
+Dataframe API for all language => Scala, Python, R, ...
+--
+
+=== Overview
+
+image::catalyst/overview/Catalyst_overview.svg[alt="Catalyst_overview", background, height=550px]
+[.notes]
+--
+* Designed to be extensible and open to other languages(ie Frontend) and optimized
+according to hardware (backend)
+--
+
+=== Analysis
+
+Any _frontend API_ get translated to +
+*Unresolved logical plan* aka an *Unresolved query plan*
+
+Meaning:
+
+* Check the Catalog for columns names and Tables
+* Resolves (inner) IDs to same values
+* ...
+
+[.notes]
+--
+* Spark SQL => SQL Parser => Tree
+* DataFrame (Any Language) => Relation
+* unresolved logical plan => Tree
+--
+
+=== Logical Optimization
+
+Optimized logical plan is generated using standard-rules as:
+
+ * Constant folding
+ * Predicate pushdown
+ * Projection pruning
+ * Null propagation
+ * Boolean expression simplification
+ * ...
+
+=== Engine based on Rules
+
+Let's keep it simple !
+
+[source,scala]
+----
+T0 => R1 => T1 => R2 => T2 => ... => Rn => Tn
+----
+
+We take a Tree of type T and transform it using a rule to obtain a new Tree +
+type of T1
+
+And so on until Tn-1 == Tn => call a *fixed point*
+
+[.notes]
+--
+* Rules can be composable and run in Batch
+* Based on scala functionnal programming => pattern matching
+--
+
+=== ...and Tree
+
+image::catalyst/catalyst_tree.png[Catalyst tree]
+[source, java]
+----
+tree.transform {
+   case Add(Literal(c1), Literal(c2)) => Literal(c1+c2)
+}
+----
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::catalyst/engine/1.svg[alt="Catalyst engine 1", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::catalyst/engine/2.svg[alt="Catalyst engine 2", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::catalyst/engine/3.svg[alt="Catalyst engine 3", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::catalyst/engine/4.svg[alt="Catalyst engine 4", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::catalyst/engine/5.svg[alt="Catalyst engine 5", background, height=600px]
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::catalyst/engine/6.svg[alt="Catalyst engine 6", background, height=600px]
+
+=== Physical Planning
+
+*Physical plan => DAG* as we saw earlier
+
+Use a cost-based selection principle by generating many plans and
+using cost model
+
+=== Code Generation
+
+Thanks to *Tungsten project* to produce optimized bytecode
+
+Tackle Performance overhead of Generic evaluation: Object creation and virtual function calls
+and Memory consumption: primitive boxing
+
+[.notes]
+--
+* See tungsten optimization later
+--
+
+== Spark memory management
+
+=== Overview
+
+image::spark_memory/Spark_memory_detail.svg[alt="Overview", background, height=550px]
+
+[.notes]
+--
+Explain all memory regions
+--
+
+=== Memory in numbers
+
+|===
+| Requested(Yarn)  | 10 + max(0.1%* x 10g,384M) = *11g*
+| Executor memory | 10G
+| Overhead | 300Mb
+| Execution / Storage |  (10 - 0.3) * 0.6 = *5,8G*
+| Reserved |  (10 - 0.3) - 5.8g = 3.9G
+|===
+
+[.notes]
+--
+* spark.memory.fraction = 0.6 & spark.storage.memoryFraction = 0.5
+* spark.executor.memoryOverhead	executorMemory * 0.10, with minimum of 384
+* yarn.scheduler.minimum-allocation-mb = 1024
+--
+
+=== Execution vs Storage
+
+* Execution memory : used for sorting, shuffling, joining, aggregating
+* Storage memory : Caching, Broadcasting variable
+
+=== Unified memory model
+
+Storage and Execution can use all the *available* heap memory
+
+but, what happens on memory starvation ?
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::spark_memory/1.svg[alt="Unified memory model 1", background, height=550px]
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/2.svg[alt="Unified memory model 2", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/3.svg[alt="Unified memory model 3", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/4.svg[alt="Unified memory model 4", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/5.svg[alt="Unified memory model 5", background, height=600px]
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/6.svg[alt="Unified memory model 6", background, height=600px]
+[.notes]
+--
+* Caching is not always used, Execution result will always be needed, so Storage is evicted
+* User often over caches stuff and don't use it
+--
+
+[transition="none-in none-out"]
+=== !
+image::spark_memory/7.svg[alt="Unified memory model 7", background, height=600px]
+[.notes]
+--
+* You can choose what fraction of memory is immune to evict, but you'll face more Spilling and OOM
+--
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::spark_memory/8.svg[alt="Unified memory model 8", background, height=600px]
+[.notes]
+--
+ * If all Reserved memory is not used, it is still useable
+--
+
+=== Caching and Checkpointing
+
+two useful optimizations techniques
+
+=== Caching
+
+As Spark is memory-based, caching is a common optimization techniques
+
+* Use storage memory
+* Prevent slow I/O shuffling and disk
+* Preserve RDD lineage
+
+[transition="fade-in none-out", transition-speed="fast"]
+=== !
+image::dag/1.svg[alt="dag1", background, height=600px]
+[.notes]
+--
+* Just a random Dag, but one step has been cache
+* Good optimization to cache, a co-partitioned Dataset as it is an expensive task
+--
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::dag/2.svg[alt="Unified memory model 7", background, height=600px]
+[.notes]
+--
+* See what happens if a cached partition is lost
+* Missing partitions will be recomputed from its parent
+--
+=== Checkpointing
+
+Checkpointing save a *point in RDD history*
+
+* Store to disk, so more memory available but slow to save
+* Survive after driver restart
+
+[transition="none-in fade-out",  transition-speed="fast"]
+=== !
+image::dag/3.svg[alt="Unified memory model 8", background, height=600px]
+[.notes]
+--
+* Checkpointing can also be useful to not recompute expensive task
+* It does not require memory, but I/O Disk
+* RDD lineage is lost
+--
+
+== Project Tungsten
+
+*Tungsten* was release in *Apache Spark 1.5/6* in 2015/16
+This is not new Stuff
+
+=== Hardware evolution
+
+|===
+||2010 | 2015 | ~2020
+|Disk | 50MB/s (HDD) | 500 MB/S (SSD) | 500 MB/S (SSD)
+|Network | 1GB/s | 10 GB/s | 10 GB/s
+|CPU | ~3Ghz | ~3GHz more cores | ~4Ghz even more cores
+|===
+
+=== New Bottlenecks: CPU
+
+* Networks and disks are 10x faster
+* Spark I/Os were optimized
+  ** Optimized reading of input data: Pruning partition
+  ** Optimized shuffle implementation + network layer (v 1.2)
+* Data formats like Parquet / Orc improvements
+* Serializing, Hashing are CPU bound workloads
+
+
+=== Tungsten focus
+
+* Custom memory management and Binary Processing
+* Cache-aware computation
+* Code generation
+
+=== JVM Caveats
+
+Spark run on the JVM and favors in-memory computation
+
+It relies on JVM Heap which comes with *JVM Object overhead* and *Garbage collection*
+
+[.notes]
+--
+* a 4-byte string used 48 bytes in memory with JVM overhead
+* Famous stop of the world Full GC
+--
+
+=== Tungsten solutions
+
+[%step]
+* Use a custom binary format to store object in memory
+* Use custom C-Style manual memory management __sun.misc.Unsafe__ API & off-heap memory (Optional)
+* Translate Spark operations to act directly on their binary format
+
+[.notes]
+--
+* Binary format, better memory footprint
+* Decide exactly where data is stored and how
+* Encoders from Dataset API are bridges from JVM Object model to binary memory
+format and quite optimized
+--
+
+=== Cache-aware computation
+
+CPU Caches are orders of magnitude faster than main memory access
+
+Cache-aware computation means create *algorithms to favor sequential memory access*
+and *optimize use of CPU L1/L2/L3 caches* to process Spark custom binary format
+
+[.notes]
+--
+* These algorithms are directly linked to the custom binary data structure
+* increase efficiency of all use cases.
+--
+
+=== Code Generation
+
+*Tackle Generic code cost using metadata to produce specific optimized bytecode*
+
+* Improve expression evaluation as seen in the catalyst optimizer
+* Improve performance conversion between in-memory format to wire-protocol (Serialization)
+* Add compiler backends as LLVM to leverages instructions on modern CPUs/GPUs
+
+[.notes]
+--
+* Personal definition
+* Metadata => semantics, schema
+--
+
+== Next...
+
+=== Incoming V3.0
+
+* DatasourceV2 API: Unified Streaming/Batch datasource
+* Spark on Kubernetes
+* Project Hydrogen : Unified AI/Big Data
+* Support for hadoop 3.X
+* Adaptive execution
+
+=== Innovative ecosysteme
+
+* Delta Lake storage: reliable data and Acid transactions
+* Koalas: Scalable pandas on Spark
+
+== !
+
+*Thank you*
+
+== Questions
+
+image::questions.svg[alt="Questions", background, height=550px]
